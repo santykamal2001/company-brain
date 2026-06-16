@@ -44,12 +44,12 @@ async def init_db() -> None:
                 "SET search_path = ag_catalog, '$user', public;"
             )
         )
-        # Create the graph if it doesn't exist
-        await conn.execute(
-            __import__("sqlalchemy").text(
-                f"SELECT * FROM ag_catalog.create_graph('{settings.age_graph_name}') "
-                f"WHERE NOT EXISTS ("
-                f"  SELECT 1 FROM ag_catalog.ag_graph WHERE name = '{settings.age_graph_name}'"
-                f");"
+        # Create the graph if it doesn't exist (create_graph errors if already exists)
+        try:
+            await conn.execute(
+                __import__("sqlalchemy").text(
+                    f"SELECT * FROM ag_catalog.create_graph('{settings.age_graph_name}');"
+                )
             )
-        )
+        except Exception:
+            pass  # Graph already exists — safe to ignore
