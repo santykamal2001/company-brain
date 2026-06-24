@@ -31,10 +31,10 @@ class UpdateACLRequest(BaseModel):
 
 @router.post("/upload", status_code=202)
 async def upload_document(
+    user: CurrentUser,
     file: UploadFile = File(...),
     classification: str = Form(default="internal"),
     allowed_departments: str = Form(default=""),
-    user: CurrentUser = Depends(),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     if user.role not in (RoleEnum.admin, RoleEnum.manager):
@@ -179,7 +179,7 @@ async def reindex_document(
     return {"document_id": str(document_id), "status": "queued"}
 
 
-@router.delete("/{document_id}", status_code=204)
+@router.delete("/{document_id}", status_code=204, response_model=None)
 async def delete_document(
     document_id: UUID,
     user: CurrentUser,

@@ -45,10 +45,12 @@ async def _lifespan(app: FastAPI):
 
 def _run_migrations() -> None:
     import subprocess
-    import sys
     try:
+        # Invoke the `alembic` console script directly rather than `python -m alembic`:
+        # `-m` prepends the cwd to sys.path, which would let our own ./alembic
+        # migrations directory shadow the real installed `alembic` package.
         result = subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            ["alembic", "upgrade", "head"],
             capture_output=True, text=True, cwd=os.path.dirname(__file__),
         )
         if result.returncode != 0:

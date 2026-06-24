@@ -1,8 +1,6 @@
-version: "3.9"
-
 services:
   postgres:
-    image: apache/age:PG16_latest
+    image: apache/age:release_PG16_1.6.0
     restart: unless-stopped
     environment:
       POSTGRES_DB: company_brain
@@ -24,7 +22,7 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:6333/readyz || exit 1"]
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/6333' || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 10

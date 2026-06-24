@@ -813,6 +813,11 @@ company-brain/
 │   ├── database.py                   # SQLAlchemy async engine + AGE schema init
 │   ├── requirements.txt
 │   ├── Dockerfile
+│   ├── alembic.ini
+│   ├── alembic/
+│   │   ├── env.py                    # Async Alembic config
+│   │   └── versions/
+│   │       └── 0001_initial_schema.py # Full schema + AGE extension + enums
 │   ├── api/
 │   │   ├── auth.py                   # JWT login/refresh/logout + SSO endpoints
 │   │   ├── users.py                  # User CRUD (admin only)
@@ -860,13 +865,8 @@ company-brain/
 │   ├── tsconfig.json
 │   ├── nginx.conf                   # Production nginx config (SPA + /api proxy)
 │   └── Dockerfile                   # Multi-stage: node build → nginx serve
-├── alembic/
-│   ├── env.py                       # Async Alembic config
-│   └── versions/
-│       └── 0001_initial_schema.py   # Full schema + AGE extension + enums
 ├── docker-compose.yml               # 5 services + optional Ollama profile
 ├── .env.example                     # All config knobs documented
-├── alembic.ini
 ├── CLAUDE.md                        # Developer guide (invariants, verification checklist)
 └── .gitignore
 ```

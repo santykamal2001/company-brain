@@ -15,10 +15,12 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Enable Apache AGE extension
+    # Enable Apache AGE extension. Deliberately do NOT set search_path to
+    # include ag_catalog here — doing so would make the unqualified
+    # CREATE TABLE statements below land in ag_catalog instead of public.
+    # AGE's own runtime search_path setup happens separately in
+    # database.py::init_db() on a different connection.
     op.execute("CREATE EXTENSION IF NOT EXISTS age;")
-    op.execute("LOAD 'age';")
-    op.execute("SET search_path = ag_catalog, '$user', public;")
 
     op.create_table(
         "departments",

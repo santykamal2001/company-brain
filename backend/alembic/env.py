@@ -7,7 +7,7 @@ from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../backend"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from database import Base  # noqa: E402
 import access_control.models  # noqa: F401, E402 — import to register all models

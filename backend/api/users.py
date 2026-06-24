@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -32,15 +33,18 @@ class UpdateUserRequest(BaseModel):
     is_active: bool | None = None
 
 
-def _require_admin(user: CurrentUser) -> CurrentUser:
+def _require_admin(user: CurrentUser) -> User:
     if user.role != RoleEnum.admin:
         raise HTTPException(status_code=403, detail="Admin role required")
     return user
 
 
+AdminUser = Annotated[User, Depends(_require_admin)]
+
+
 @router.get("/")
 async def list_users(
-    admin: CurrentUser = Depends(_require_admin),
+    admin: AdminUser,
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     result = await db.execute(select(User).order_by(User.created_at.desc()))
@@ -51,7 +55,7 @@ async def list_users(
 @router.post("/", status_code=201)
 async def create_user(
     body: CreateUserRequest,
-    admin: CurrentUser = Depends(_require_admin),
+    admin: AdminUser,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     existing = await db.execute(select(User).where(User.email == body.email))
@@ -77,7 +81,7 @@ async def create_user(
 async def update_user(
     user_id: UUID,
     body: UpdateUserRequest,
-    admin: CurrentUser = Depends(_require_admin),
+    admin: AdminUser,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     user = await db.get(User, user_id)
@@ -96,10 +100,10 @@ async def update_user(
     return _user_dict(user)
 
 
-@router.delete("/{user_id}", status_code=204)
+@router.delete("/{user_id}", status_code=204, response_model=None)
 async def deactivate_user(
     user_id: UUID,
-    admin: CurrentUser = Depends(_require_admin),
+    admin: AdminUser,
     db: AsyncSession = Depends(get_db),
 ) -> None:
     user = await db.get(User, user_id)
@@ -122,7 +126,7 @@ async def list_departments(
 @router.post("/departments", status_code=201)
 async def create_department(
     name: str,
-    admin: CurrentUser = Depends(_require_admin),
+    admin: AdminUser,
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     dept = Department(name=name)
