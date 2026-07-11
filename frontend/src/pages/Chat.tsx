@@ -1,12 +1,24 @@
 import { useState, useRef, useEffect } from "react";
 import { Send, Loader2, FileText, Network, GitBranch, Zap, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
-import { query, type QueryResponse } from "../lib/api";
+import { streamQuery, type StreamMetadata, type Source } from "../lib/api";
+
+interface AssistantMeta {
+  retrieval_mode: string;
+  graph_entities_used: string[];
+  decision_trail_used: boolean;
+  chunks_used: number;
+  denied_chunk_count: number;
+  retrieval_ms: number;
+  sources: Source[];
+  latency_ms?: number;
+}
 
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
-  response?: QueryResponse;
+  streaming?: boolean;  // true while tokens are still arriving
+  meta?: AssistantMeta;
 }
 
 const SUGGESTIONS = [
@@ -72,7 +84,7 @@ function DecisionCard() {
   );
 }
 
-function SourcesPanel({ sources }: { sources: QueryResponse["sources"] }) {
+function SourcesPanel({ sources }: { sources: Source[] }) {
   const [open, setOpen] = useState(false);
   if (!sources.length) return null;
   return (
@@ -122,34 +134,55 @@ export default function Chat() {
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef  = useRef<HTMLTextAreaElement>(null);
+  const cancelRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const send = async (q: string) => {
+  const send = (q: string) => {
     if (!q.trim() || loading) return;
     const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: q };
-    setMessages(m => [...m, userMsg]);
+    const assistantId = crypto.randomUUID();
+    setMessages(m => [...m, userMsg, { id: assistantId, role: "assistant", content: "", streaming: true }]);
     setInput("");
     setLoading(true);
-    try {
-      const resp = await query(q);
-      setMessages(m => [...m, {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: resp.answer,
-        response: resp,
-      }]);
-    } catch (err) {
-      setMessages(m => [...m, {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
-      }]);
-    } finally {
-      setLoading(false);
-    }
+
+    const cancel = streamQuery(
+      q,
+      // onMetadata — retrieval done, sources available before LLM starts
+      (meta: StreamMetadata) => {
+        setMessages(m => m.map(msg =>
+          msg.id === assistantId ? { ...msg, meta: { ...meta } } : msg
+        ));
+      },
+      // onToken — append each token as it arrives
+      (token: string) => {
+        setMessages(m => m.map(msg =>
+          msg.id === assistantId ? { ...msg, content: msg.content + token } : msg
+        ));
+        bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      },
+      // onDone — finalize with total latency
+      (latencyMs: number) => {
+        setMessages(m => m.map(msg =>
+          msg.id === assistantId
+            ? { ...msg, streaming: false, meta: msg.meta ? { ...msg.meta, latency_ms: latencyMs } : undefined }
+            : msg
+        ));
+        setLoading(false);
+      },
+      // onError
+      (err: Error) => {
+        setMessages(m => m.map(msg =>
+          msg.id === assistantId
+            ? { ...msg, content: `Error: ${err.message}`, streaming: false }
+            : msg
+        ));
+        setLoading(false);
+      },
+    );
+    cancelRef.current = cancel;
   };
 
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -241,39 +274,45 @@ export default function Chat() {
                   {msg.content}
                 </div>
 
-                {/* Metadata */}
-                {msg.response && (
+                {/* Streaming cursor */}
+                {msg.streaming && msg.content === "" && (
+                  <span style={{ display: "inline-block", width: 8, height: 14, background: "var(--primary)", borderRadius: 2, animation: "pulse-dot 1s ease-in-out infinite", verticalAlign: "middle", marginLeft: 2 }} />
+                )}
+
+                {/* Metadata — appears as soon as retrieval is done (before streaming finishes) */}
+                {msg.meta && (
                   <div style={{ marginTop: 8 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                      <ModeBadge mode={msg.response.retrieval_mode} />
+                      <ModeBadge mode={msg.meta.retrieval_mode} />
                       <span style={{ fontSize: 11, color: "var(--text-3)" }}>
-                        {msg.response.chunks_used} chunks · {msg.response.latency_ms}ms
+                        {msg.meta.chunks_used} chunks
+                        {msg.meta.latency_ms != null ? ` · ${msg.meta.latency_ms}ms` : ` · ${msg.meta.retrieval_ms}ms retrieval`}
                       </span>
-                      {msg.response.graph_entities_used.length > 0 && (
+                      {msg.meta.graph_entities_used.length > 0 && (
                         <span style={{ fontSize: 11, color: "var(--primary)" }}>
-                          {msg.response.graph_entities_used.length} graph nodes
+                          {msg.meta.graph_entities_used.length} graph nodes
                         </span>
                       )}
-                      {msg.response.denied_chunk_count > 0 && (
+                      {msg.meta.denied_chunk_count > 0 && (
                         <span style={{
                           display: "inline-flex", alignItems: "center", gap: 4,
                           fontSize: 11, color: "var(--warn)", fontWeight: 500,
                         }}>
                           <AlertTriangle size={10} />
-                          {msg.response.denied_chunk_count} restricted
+                          {msg.meta.denied_chunk_count} restricted
                         </span>
                       )}
                     </div>
 
-                    {msg.response.decision_trail_used && <DecisionCard />}
-                    <SourcesPanel sources={msg.response.sources} />
+                    {msg.meta.decision_trail_used && <DecisionCard />}
+                    <SourcesPanel sources={msg.meta.sources} />
                   </div>
                 )}
               </div>
             </div>
           ))}
 
-          {loading && (
+          {loading && messages[messages.length - 1]?.content === "" && (
             <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: 20 }}>
               <div style={{
                 display: "flex", alignItems: "center", gap: 8,

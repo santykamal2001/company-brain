@@ -57,6 +57,80 @@ export interface QueryResponse {
 export const query = (question: string, n_results = 8) =>
   request<QueryResponse>("POST", "/api/query/", { question, n_results });
 
+export interface StreamMetadata {
+  retrieval_mode: string;
+  graph_entities_used: string[];
+  decision_trail_used: boolean;
+  chunks_used: number;
+  denied_chunk_count: number;
+  retrieval_ms: number;
+  sources: Source[];
+}
+
+/**
+ * Streaming query via SSE. Calls onMetadata once (sources + mode), then onToken
+ * for each LLM token, then onDone with total latency. Returns a cleanup function.
+ */
+export function streamQuery(
+  question: string,
+  onMetadata: (meta: StreamMetadata) => void,
+  onToken: (token: string) => void,
+  onDone: (latencyMs: number) => void,
+  onError?: (err: Error) => void,
+): () => void {
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const res = await fetch(`${BASE}/api/query/stream`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail ?? "Stream request failed");
+      }
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE events are separated by double newlines
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+
+        for (const raw of events) {
+          if (!raw.trim()) continue;
+          const lines = raw.split("\n");
+          const eventType = lines.find((l) => l.startsWith("event:"))?.slice(7).trim() ?? "token";
+          const dataLine = lines.find((l) => l.startsWith("data:"))?.slice(6).trim() ?? "";
+          if (!dataLine) continue;
+
+          const data = JSON.parse(dataLine);
+          if (eventType === "metadata") onMetadata(data as StreamMetadata);
+          else if (eventType === "token") onToken(data as string);
+          else if (eventType === "done") onDone((data as { latency_ms: number }).latency_ms);
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") {
+        onError?.(err as Error);
+      }
+    }
+  })();
+
+  return () => controller.abort();
+}
+
 // ─── Documents ─────────────────────────────────────────────────────────────
 export interface Document {
   id: string;

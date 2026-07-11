@@ -1,9 +1,12 @@
 """
 Cross-encoder reranker. Loaded lazily on first call; singleton thereafter.
 Falls back to score-order if the reranker fails to load.
+rerank()       — synchronous, kept for direct calls
+rerank_async() — runs rerank() in a thread pool so the event loop isn't blocked
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from functools import lru_cache
 from typing import Any
@@ -30,7 +33,7 @@ def rerank(
     chunks: list[dict[str, Any]],
     top_k: int = 8,
 ) -> list[dict[str, Any]]:
-    """Re-score chunks with cross-encoder and return top_k."""
+    """Re-score chunks with cross-encoder and return top_k. CPU-bound — blocks caller."""
     if not chunks:
         return []
 
@@ -49,3 +52,13 @@ def rerank(
     except Exception as exc:
         log.warning(f"Reranking failed: {exc}")
         return chunks[:top_k]
+
+
+async def rerank_async(
+    question: str,
+    chunks: list[dict[str, Any]],
+    top_k: int = 8,
+) -> list[dict[str, Any]]:
+    """Non-blocking wrapper: runs rerank() in the default thread pool executor."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, rerank, question, chunks, top_k)

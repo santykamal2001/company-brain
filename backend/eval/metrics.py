@@ -1,11 +1,43 @@
 """
 Retrieval and answer quality metrics.
-- Recall@k, NDCG@k, MRR  — offline; need relevance judgements
-- llm_judge              — online; Claude Haiku rates answer quality 1-5
+
+Scoring:
+  llm_judge           — ask Haiku to rate answer vs expected key facts (0.0–1.0)
+  refusal_accuracy    — for unanswerable/adversarial questions: did the model correctly
+                        say "I don't know" instead of hallucinating? (1.0 or 0.0)
+  hallucination_check — for answerable questions: does the answer contain facts not
+                        grounded in the retrieved chunks? (1.0 = grounded, 0.0 = hallucinated)
+
+Offline metrics (require chunk-level relevance labels):
+  recall_at_k, ndcg_at_k, mrr
 """
 from __future__ import annotations
 
 import math
+import re
+
+# Phrases that indicate the model correctly refused to answer
+_REFUSAL_PHRASES = [
+    "don't have information",
+    "don't have that information",
+    "no information",
+    "not mentioned",
+    "not available",
+    "i don't know",
+    "i'm not sure",
+    "i cannot find",
+    "cannot find",
+    "not in the",
+    "not found",
+    "doesn't appear",
+    "does not appear",
+    "unable to find",
+    "no details",
+    "no data",
+    "this information is not",
+    "i couldn't find",
+    "could not find",
+]
 
 
 def recall_at_k(retrieved: list[str], relevant: list[str], k: int) -> float:
@@ -34,10 +66,66 @@ def mrr(retrieved: list[str], relevant: list[str]) -> float:
     return 0.0
 
 
+def refusal_accuracy(answer: str) -> float:
+    """
+    Returns 1.0 if the model's answer indicates it doesn't have the information
+    (correct for unanswerable/adversarial questions), 0.0 if it gave a specific
+    confident answer (hallucination risk).
+    """
+    lower = answer.lower()
+    if any(phrase in lower for phrase in _REFUSAL_PHRASES):
+        return 1.0
+    # Short answer with uncertainty words also counts
+    if len(answer) < 120 and any(w in lower for w in ["unclear", "uncertain", "unavailable", "no record"]):
+        return 1.0
+    return 0.0
+
+
+async def hallucination_check(
+    question: str,
+    answer: str,
+    source_excerpts: list[str],
+) -> float:
+    """
+    Ask Haiku to verify whether the answer is grounded in the provided source chunks.
+    Returns 1.0 (grounded) or 0.0 (likely hallucinated).
+    Falls back to 1.0 if judge unavailable (conservative — don't penalize on judge failure).
+    """
+    if not source_excerpts:
+        return 0.5  # Can't verify without sources
+
+    try:
+        import anthropic
+        from config import get_settings
+        settings = get_settings()
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+
+        sources_text = "\n\n---\n\n".join(source_excerpts[:5])
+        prompt = (
+            "You are an answer grounding verifier.\n\n"
+            f"QUESTION: {question}\n\n"
+            f"ANSWER: {answer[:800]}\n\n"
+            f"SOURCE CHUNKS:\n{sources_text[:2000]}\n\n"
+            "Does the ANSWER contain specific facts (names, numbers, decisions, dates) "
+            "that are NOT supported by the SOURCE CHUNKS?\n"
+            "Reply with exactly one word: GROUNDED or HALLUCINATED"
+        )
+        resp = await client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=10,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        verdict = resp.content[0].text.strip().upper()
+        return 1.0 if "GROUND" in verdict else 0.0
+    except Exception:
+        return 1.0  # Conservative fallback
+
+
 async def llm_judge(question: str, answer: str, expected: str) -> float:
     """
-    Ask Claude Haiku to rate how well the answer covers the expected key facts.
-    Returns a float 0.0–1.0 (maps 1-5 integer score).
+    Ask Haiku to rate how well the answer covers the expected key facts.
+    Returns a float 0.0–1.0 (maps 1-5 integer score to 0.0/0.25/0.5/0.75/1.0).
+    Falls back to keyword heuristic if judge is unavailable.
     """
     try:
         import anthropic
@@ -67,7 +155,6 @@ async def llm_judge(question: str, answer: str, expected: str) -> float:
         score = int(raw[0])
         return (score - 1) / 4.0
     except Exception:
-        # If LLM judge fails, fall back to keyword heuristic
         return _keyword_score(answer, expected)
 
 

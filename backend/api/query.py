@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from access_control.rbac import acl_context_from_user
-from agent.brain import ask
+from agent.brain import ask, ask_stream
 from api.auth import CurrentUser
 from database import get_db
 
@@ -50,4 +51,39 @@ async def query(
         graph_entities_used=response.graph_entities_used,
         decision_trail_used=response.decision_trail_used,
         denied_chunk_count=response.denied_chunk_count,
+    )
+
+
+@router.post("/stream")
+async def query_stream(
+    body: QueryRequest,
+    user: CurrentUser,
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """
+    SSE streaming endpoint. Returns text/event-stream with three event types:
+      metadata — retrieval info + sources (arrives before first token)
+      token    — one LLM output token (arrives as generated)
+      done     — total latency_ms
+
+    Clients should use EventSource or fetch+ReadableStream to consume.
+    """
+    acl = acl_context_from_user(user)
+
+    async def generate():
+        async for chunk in ask_stream(
+            question=body.question,
+            acl=acl,
+            db=db,
+            n_results=min(body.n_results, 20),
+        ):
+            yield chunk
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable nginx buffering
+        },
     )

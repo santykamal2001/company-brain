@@ -34,6 +34,17 @@ class LLMClient(ABC):
         ...
 
     @abstractmethod
+    async def stream(
+        self,
+        system: str,
+        user: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.0,
+    ) -> AsyncIterator[str]:
+        """Yield text tokens as they arrive from the provider."""
+        ...
+
+    @abstractmethod
     async def complete_with_cache(
         self,
         system: str,
@@ -81,6 +92,17 @@ class ClaudeClient(LLMClient):
             output_tokens=usage.output_tokens,
             cached_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
         )
+
+    async def stream(self, system: str, user: str, max_tokens: int = 2048, temperature: float = 0.0) -> AsyncIterator[str]:
+        async with self._client.messages.stream(
+            model=self._model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        ) as s:
+            async for text in s.text_stream:
+                yield text
 
     async def complete_with_cache(self, system: str, cached_prefix: str, user: str, max_tokens: int = 512) -> LLMResponse:
         resp = await self._client.messages.create(
@@ -136,6 +158,19 @@ class OpenAIClient(LLMClient):
             output_tokens=usage.completion_tokens if usage else 0,
         )
 
+    async def stream(self, system: str, user: str, max_tokens: int = 2048, temperature: float = 0.0) -> AsyncIterator[str]:
+        async with await self._client.chat.completions.create(
+            model=self._model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            stream=True,
+        ) as s:
+            async for chunk in s:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if delta:
+                    yield delta
+
     async def complete_with_cache(self, system: str, cached_prefix: str, user: str, max_tokens: int = 512) -> LLMResponse:
         return await self.complete(system, cached_prefix + "\n\n" + user, max_tokens)
 
@@ -170,6 +205,19 @@ class AzureOpenAIClient(LLMClient):
             output_tokens=usage.completion_tokens if usage else 0,
         )
 
+    async def stream(self, system: str, user: str, max_tokens: int = 2048, temperature: float = 0.0) -> AsyncIterator[str]:
+        async with await self._client.chat.completions.create(
+            model=self._model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            stream=True,
+        ) as s:
+            async for chunk in s:
+                delta = chunk.choices[0].delta.content if chunk.choices else None
+                if delta:
+                    yield delta
+
     async def complete_with_cache(self, system: str, cached_prefix: str, user: str, max_tokens: int = 512) -> LLMResponse:
         return await self.complete(system, cached_prefix + "\n\n" + user, max_tokens)
 
@@ -202,6 +250,33 @@ class OllamaClient(LLMClient):
         resp.raise_for_status()
         data = resp.json()
         return LLMResponse(text=data["message"]["content"])
+
+    async def stream(self, system: str, user: str, max_tokens: int = 2048, temperature: float = 0.0) -> AsyncIterator[str]:
+        async with self._http.stream(
+            "POST",
+            "/api/chat",
+            json={
+                "model": self._model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                "options": {"temperature": temperature, "num_predict": max_tokens},
+                "stream": True,
+            },
+        ) as resp:
+            async for line in resp.aiter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    token = data.get("message", {}).get("content", "")
+                    if token:
+                        yield token
+                    if data.get("done"):
+                        break
+                except json.JSONDecodeError:
+                    continue
 
     async def complete_with_cache(self, system: str, cached_prefix: str, user: str, max_tokens: int = 512) -> LLMResponse:
         return await self.complete(system, cached_prefix + "\n\n" + user, max_tokens)
