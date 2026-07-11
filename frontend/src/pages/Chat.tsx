@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Send, Loader2, GitBranch, FileText, Network, Zap } from "lucide-react";
+import { Send, Loader2, FileText, Network, GitBranch, Zap, ChevronDown, ChevronRight, AlertTriangle } from "lucide-react";
 import { query, type QueryResponse } from "../lib/api";
 
 interface Message {
@@ -7,198 +7,354 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   response?: QueryResponse;
-  timestamp: Date;
 }
 
-const MODE_COLORS: Record<string, string> = {
-  vector: "bg-blue-100 text-blue-700",
-  graph: "bg-purple-100 text-purple-700",
-  hybrid: "bg-green-100 text-green-700",
-  decision: "bg-amber-100 text-amber-700",
+const SUGGESTIONS = [
+  "Who works on Project Atlas?",
+  "Why did we choose PostgreSQL over MySQL?",
+  "What is our parental leave policy?",
+  "Which teams collaborate on the payment system?",
+  "What decisions were made about the Q3 architecture?",
+  "What alternatives did leadership consider for the stack?",
+];
+
+const MODE_META: Record<string, { label: string; color: string; bg: string; icon: React.ReactNode }> = {
+  vector:   { label: "Vector",         color: "var(--ok)",       bg: "var(--ok-soft)",       icon: <FileText size={11} /> },
+  graph:    { label: "Graph",          color: "var(--primary)",  bg: "var(--primary-soft)",  icon: <Network size={11} /> },
+  hybrid:   { label: "Hybrid",         color: "var(--warn)",     bg: "var(--warn-soft)",     icon: <GitBranch size={11} /> },
+  decision: { label: "Decision Trail", color: "var(--decision)", bg: "var(--decision-soft)", icon: <Zap size={11} /> },
 };
 
-const MODE_ICONS: Record<string, React.ReactNode> = {
-  vector: <FileText size={12} />,
-  graph: <Network size={12} />,
-  hybrid: <GitBranch size={12} />,
-  decision: <Zap size={12} />,
-};
+function ModeBadge({ mode }: { mode: string }) {
+  const m = MODE_META[mode] ?? { label: mode, color: "var(--text-3)", bg: "var(--surface-3)", icon: null };
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 4,
+      padding: "2px 8px", borderRadius: 999,
+      background: m.bg, color: m.color,
+      fontSize: 11, fontWeight: 500,
+    }}>
+      {m.icon} {m.label}
+    </span>
+  );
+}
+
+function DecisionCard() {
+  return (
+    <div style={{
+      marginTop: 12,
+      borderRadius: 10,
+      border: "1px solid var(--decision-soft)",
+      background: "var(--decision-soft)",
+      overflow: "hidden",
+    }}>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 8,
+        padding: "8px 14px",
+        background: "var(--decision)",
+        color: "white",
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: "0.05em",
+        textTransform: "uppercase",
+      }}>
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+          <polygon points="5,0 10,5 5,10 0,5" />
+        </svg>
+        Decision Trail Active
+      </div>
+      <div style={{ padding: "10px 14px", fontSize: 12, color: "var(--text-2)", lineHeight: 1.5 }}>
+        This answer was retrieved from the Decision Trail. The response incorporates
+        structured decision records — including alternatives considered, decision makers,
+        and superseded decisions. See source citations for evidence chunks.
+      </div>
+    </div>
+  );
+}
+
+function SourcesPanel({ sources }: { sources: QueryResponse["sources"] }) {
+  const [open, setOpen] = useState(false);
+  if (!sources.length) return null;
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        style={{
+          display: "flex", alignItems: "center", gap: 5,
+          fontSize: 11, color: "var(--text-3)", fontWeight: 500,
+          background: "none", border: "none", cursor: "pointer", padding: 0,
+        }}
+      >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        {sources.length} source{sources.length > 1 ? "s" : ""}
+      </button>
+      {open && (
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+          {sources.slice(0, 5).map((src, i) => (
+            <div key={i} style={{
+              padding: "9px 12px",
+              borderRadius: 8,
+              background: "var(--surface-2)",
+              border: "1px solid var(--border)",
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 280 }}>
+                  {src.document_title}
+                </span>
+                <span style={{ fontSize: 10, color: "var(--ok)", fontWeight: 600, flexShrink: 0, marginLeft: 8 }}>
+                  {(src.score * 100).toFixed(0)}%
+                </span>
+              </div>
+              <p className="line-clamp-2" style={{ margin: 0, fontSize: 11, color: "var(--text-2)", lineHeight: 1.5 }}>
+                {src.excerpt}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef  = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const sendMessage = async (question: string) => {
-    if (!question.trim() || loading) return;
-    const userMsg: Message = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: question,
-      timestamp: new Date(),
-    };
-    setMessages((m) => [...m, userMsg]);
+  const send = async (q: string) => {
+    if (!q.trim() || loading) return;
+    const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: q };
+    setMessages(m => [...m, userMsg]);
     setInput("");
     setLoading(true);
-
     try {
-      const resp = await query(question);
-      const assistantMsg: Message = {
+      const resp = await query(q);
+      setMessages(m => [...m, {
         id: crypto.randomUUID(),
         role: "assistant",
         content: resp.answer,
         response: resp,
-        timestamp: new Date(),
-      };
-      setMessages((m) => [...m, assistantMsg]);
+      }]);
     } catch (err) {
-      setMessages((m) => [
-        ...m,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
-          timestamp: new Date(),
-        },
-      ]);
+      setMessages(m => [...m, {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: `Error: ${err instanceof Error ? err.message : "Unknown error"}`,
+      }]);
     } finally {
       setLoading(false);
     }
   };
 
+  const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(input); }
+  };
+
+  const isEmpty = messages.length === 0;
+
   return (
-    <div className="flex flex-col h-full">
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 && (
-          <div className="text-center text-gray-400 mt-20">
-            <Network size={48} className="mx-auto mb-4 opacity-40" />
-            <p className="text-lg font-medium">Ask your company anything</p>
-            <p className="text-sm mt-2">Powered by Hybrid Graph RAG + Decision Trail</p>
-            <div className="mt-6 grid grid-cols-1 gap-2 max-w-sm mx-auto text-left">
-              {[
-                "Who works on Project Atlas?",
-                "Why did we choose PostgreSQL over MySQL?",
-                "What is our parental leave policy?",
-                "Which teams collaborate on the payment system?",
-              ].map((q) => (
-                <button
-                  key={q}
-                  onClick={() => sendMessage(q)}
-                  className="text-sm px-3 py-2 rounded-lg border border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-left transition-colors"
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div className={`max-w-3xl ${msg.role === "user" ? "order-2" : "order-1"}`}>
-              <div
-                className={`px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
-                  msg.role === "user"
-                    ? "bg-blue-600 text-white rounded-br-sm"
-                    : "bg-white border border-gray-200 text-gray-800 rounded-bl-sm shadow-sm"
-                }`}
-              >
-                {msg.content}
-              </div>
-
-              {/* Assistant metadata */}
-              {msg.response && (
-                <div className="mt-2 space-y-2">
-                  {/* Retrieval mode badge */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
-                        MODE_COLORS[msg.response.retrieval_mode] || "bg-gray-100 text-gray-600"
-                      }`}
-                    >
-                      {MODE_ICONS[msg.response.retrieval_mode]}
-                      {msg.response.retrieval_mode}
-                    </span>
-                    {msg.response.decision_trail_used && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">
-                        <Zap size={10} /> Decision Trail
-                      </span>
-                    )}
-                    <span className="text-xs text-gray-400">
-                      {msg.response.chunks_used} chunks · {msg.response.latency_ms}ms
-                    </span>
-                    {msg.response.denied_chunk_count > 0 && (
-                      <span className="text-xs text-orange-500">
-                        {msg.response.denied_chunk_count} chunks restricted
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Sources */}
-                  {msg.response.sources.length > 0 && (
-                    <div className="space-y-1">
-                      {msg.response.sources.slice(0, 4).map((src, i) => (
-                        <div
-                          key={i}
-                          className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 text-xs"
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="font-medium text-gray-700 truncate">
-                              {src.document_title}
-                            </span>
-                            <span className="text-gray-400 ml-2 shrink-0">
-                              {(src.score * 100).toFixed(0)}%
-                            </span>
-                          </div>
-                          <p className="text-gray-500 line-clamp-2">{src.excerpt}</p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-
-        {loading && (
-          <div className="flex justify-start">
-            <div className="bg-white border border-gray-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
-              <Loader2 size={16} className="animate-spin text-blue-500" />
-            </div>
-          </div>
-        )}
-        <div ref={bottomRef} />
+    <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
+      {/* Recent sidebar */}
+      <div style={{
+        width: 220,
+        flexShrink: 0,
+        borderRight: "1px solid var(--border)",
+        background: "var(--surface)",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}>
+        <div style={{ padding: "14px 14px 8px", borderBottom: "1px solid var(--border)" }}>
+          <p style={{ margin: 0, fontSize: 11, fontWeight: 600, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
+            Suggestions
+          </p>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "8px 6px" }}>
+          {SUGGESTIONS.map((q, i) => (
+            <button
+              key={i}
+              onClick={() => { setInput(q); inputRef.current?.focus(); }}
+              style={{
+                display: "block", width: "100%", textAlign: "left",
+                padding: "7px 10px", borderRadius: 8, marginBottom: 2,
+                fontSize: 12, color: "var(--text-2)", lineHeight: 1.4,
+                background: "none", border: "none", cursor: "pointer",
+              }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = "var(--surface-3)"}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = "none"}
+            >
+              {q}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Input */}
-      <div className="border-t border-gray-100 p-4 bg-white">
-        <div className="flex gap-2 max-w-4xl mx-auto">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage(input)}
-            placeholder="Ask your company anything..."
-            className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-400 text-sm"
-            disabled={loading}
-          />
-          <button
-            onClick={() => sendMessage(input)}
-            disabled={loading || !input.trim()}
-            className="px-4 py-2.5 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {loading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-          </button>
+      {/* Chat area */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        {/* Messages */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "24px 24px 0" }}>
+          {isEmpty && (
+            <div style={{ textAlign: "center", marginTop: 80, animation: "fadeIn 0.3s ease" }}>
+              <svg width="52" height="52" viewBox="0 0 28 28" fill="none" style={{ margin: "0 auto 16px", display: "block" }}>
+                <polygon points="14,2 25,8 25,20 14,26 3,20 3,8" fill="var(--primary)" opacity="0.12" />
+                <polygon points="14,2 25,8 25,20 14,26 3,20 3,8" stroke="var(--primary)" strokeWidth="1.5" fill="none" />
+                <circle cx="14" cy="14" r="3.5" fill="var(--primary)" />
+              </svg>
+              <p style={{ margin: "0 0 6px", fontSize: 18, fontWeight: 600, color: "var(--text)" }}>
+                Ask your company anything
+              </p>
+              <p style={{ margin: "0 0 24px", fontSize: 13, color: "var(--text-2)" }}>
+                Hybrid Graph RAG · Decision Trail · RBAC-enforced
+              </p>
+            </div>
+          )}
+
+          {messages.map(msg => (
+            <div
+              key={msg.id}
+              style={{
+                display: "flex",
+                justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
+                marginBottom: 20,
+                animation: "fadeIn 0.2s ease",
+              }}
+            >
+              <div style={{ maxWidth: "72%" }}>
+                {/* Bubble */}
+                <div style={{
+                  padding: "11px 14px",
+                  borderRadius: msg.role === "user" ? "14px 14px 4px 14px" : "14px 14px 14px 4px",
+                  background: msg.role === "user" ? "var(--primary)" : "var(--surface)",
+                  border: msg.role === "user" ? "none" : "1px solid var(--border)",
+                  color: msg.role === "user" ? "var(--on-primary)" : "var(--text)",
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                  whiteSpace: "pre-wrap",
+                  boxShadow: msg.role === "assistant" ? "0 1px 4px var(--shadow)" : "none",
+                }}>
+                  {msg.content}
+                </div>
+
+                {/* Metadata */}
+                {msg.response && (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <ModeBadge mode={msg.response.retrieval_mode} />
+                      <span style={{ fontSize: 11, color: "var(--text-3)" }}>
+                        {msg.response.chunks_used} chunks · {msg.response.latency_ms}ms
+                      </span>
+                      {msg.response.graph_entities_used.length > 0 && (
+                        <span style={{ fontSize: 11, color: "var(--primary)" }}>
+                          {msg.response.graph_entities_used.length} graph nodes
+                        </span>
+                      )}
+                      {msg.response.denied_chunk_count > 0 && (
+                        <span style={{
+                          display: "inline-flex", alignItems: "center", gap: 4,
+                          fontSize: 11, color: "var(--warn)", fontWeight: 500,
+                        }}>
+                          <AlertTriangle size={10} />
+                          {msg.response.denied_chunk_count} restricted
+                        </span>
+                      )}
+                    </div>
+
+                    {msg.response.decision_trail_used && <DecisionCard />}
+                    <SourcesPanel sources={msg.response.sources} />
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {loading && (
+            <div style={{ display: "flex", justifyContent: "flex-start", marginBottom: 20 }}>
+              <div style={{
+                display: "flex", alignItems: "center", gap: 8,
+                padding: "11px 16px", borderRadius: "14px 14px 14px 4px",
+                background: "var(--surface)", border: "1px solid var(--border)",
+                boxShadow: "0 1px 4px var(--shadow)",
+              }}>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[0, 1, 2].map(i => (
+                    <div key={i} style={{
+                      width: 5, height: 5, borderRadius: "50%",
+                      background: "var(--primary)", opacity: 0.5,
+                      animation: `pulse-dot 1.2s ${i * 0.2}s ease-in-out infinite`,
+                    }} />
+                  ))}
+                </div>
+                <span style={{ fontSize: 12, color: "var(--text-3)" }}>Thinking…</span>
+              </div>
+            </div>
+          )}
+          <div ref={bottomRef} style={{ height: 24 }} />
+        </div>
+
+        {/* Input */}
+        <div style={{
+          padding: "12px 20px 20px",
+          borderTop: "1px solid var(--border)",
+          background: "var(--surface)",
+        }}>
+          <div style={{
+            display: "flex",
+            alignItems: "flex-end",
+            gap: 10,
+            background: "var(--surface-2)",
+            border: "1px solid var(--border)",
+            borderRadius: 12,
+            padding: "10px 10px 10px 14px",
+          }}>
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={e => {
+                setInput(e.target.value);
+                e.target.style.height = "auto";
+                e.target.style.height = Math.min(e.target.scrollHeight, 140) + "px";
+              }}
+              onKeyDown={handleKey}
+              placeholder="Ask your company anything…"
+              disabled={loading}
+              rows={1}
+              style={{
+                flex: 1,
+                resize: "none",
+                border: "none",
+                outline: "none",
+                background: "transparent",
+                color: "var(--text)",
+                fontSize: 14,
+                lineHeight: 1.5,
+                maxHeight: 140,
+                overflowY: "auto",
+              }}
+            />
+            <button
+              onClick={() => send(input)}
+              disabled={loading || !input.trim()}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 36, height: 36, borderRadius: 8, flexShrink: 0,
+                background: input.trim() && !loading ? "var(--primary)" : "var(--surface-3)",
+                color: input.trim() && !loading ? "var(--on-primary)" : "var(--text-3)",
+                border: "none", cursor: !input.trim() || loading ? "not-allowed" : "pointer",
+                transition: "background 0.15s",
+              }}
+            >
+              {loading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+            </button>
+          </div>
+          <p style={{ margin: "6px 0 0", fontSize: 10, color: "var(--text-3)", textAlign: "center" }}>
+            Answers are restricted to content you're authorized to see · Enter to send · Shift+Enter for newline
+          </p>
         </div>
       </div>
     </div>

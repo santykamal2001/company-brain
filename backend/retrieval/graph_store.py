@@ -83,47 +83,49 @@ async def upsert_entities_and_relations(
     from database import AsyncSessionLocal
 
     async def _run(session: AsyncSession) -> dict[str, str]:
+        await session.execute(text("LOAD 'age';"))
         await session.execute(text("SET search_path = ag_catalog, '$user', public;"))
         name_to_id: dict[str, str] = {}
 
         for entity in entities:
-            props = json.dumps({
-                "name": entity.name,
-                "type": entity.type,
-                "description": entity.description,
-                "acl_roles": acl_roles,
-                "classification": classification,
-                "source_document_id": source_document_id,
-            })
+            # AGE does not support ON CREATE SET / ON MATCH SET — use plain SET.
+            # Savepoint isolates each upsert so a failure doesn't abort the whole tx.
             cypher = (
                 f"MERGE (n:{entity.type} {{name: '{_escape(entity.name)}'}}) "
-                f"ON CREATE SET n.description = '{_escape(entity.description)}', "
-                f"  n.acl_roles = '{json.dumps(acl_roles)}', "
+                f"SET n.description = '{_escape(entity.description)}', "
+                f"  n.acl_roles = '{_escape(json.dumps(acl_roles))}', "
                 f"  n.classification = '{classification}' "
-                f"ON MATCH SET n.description = CASE WHEN n.description IS NULL THEN '{_escape(entity.description)}' ELSE n.description END "
                 f"RETURN id(n)"
             )
+            await session.execute(text("SAVEPOINT entity_sp;"))
             try:
                 result = await session.execute(text(_cypher(cypher)))
                 row = result.fetchone()
                 if row:
                     name_to_id[entity.name] = str(row[0])
+                await session.execute(text("RELEASE SAVEPOINT entity_sp;"))
             except Exception as exc:
+                await session.execute(text("ROLLBACK TO SAVEPOINT entity_sp;"))
                 log.warning(f"Failed to upsert entity {entity.name}: {exc}")
 
         for rel in relations:
             cypher = (
                 f"MATCH (a {{name: '{_escape(rel.source)}'}}), (b {{name: '{_escape(rel.target)}'}})"
                 f"MERGE (a)-[r:{rel.rel_type}]->(b) "
-                f"ON CREATE SET r.description = '{_escape(rel.description)}', "
+                f"SET r.description = '{_escape(rel.description)}', "
                 f"  r.source_document_id = '{source_document_id}'"
             )
+            await session.execute(text("SAVEPOINT rel_sp;"))
             try:
                 await session.execute(text(_cypher(cypher)))
+                await session.execute(text("RELEASE SAVEPOINT rel_sp;"))
             except Exception as exc:
+                await session.execute(text("ROLLBACK TO SAVEPOINT rel_sp;"))
                 log.warning(f"Failed to upsert relation {rel.source}->{rel.target}: {exc}")
 
         await session.commit()
+        # Restore normal search_path so any shared session can continue with ORM queries.
+        await session.execute(text("SET search_path = '$user', public;"))
         return name_to_id
 
     if db:
@@ -142,10 +144,11 @@ async def upsert_decision(
     from database import AsyncSessionLocal
 
     async def _run(session: AsyncSession) -> None:
+        await session.execute(text("LOAD 'age';"))
         await session.execute(text("SET search_path = ag_catalog, '$user', public;"))
 
-        alternatives_json = json.dumps(decision.alternatives_considered)
-        evidence_json = json.dumps([decision.chunk_id])
+        alternatives_json = _escape(json.dumps(decision.alternatives_considered))
+        evidence_json = _escape(json.dumps([decision.chunk_id]))
         what = _escape(decision.what_decided)
         when = _escape(decision.when_decided or "")
 
@@ -157,14 +160,16 @@ async def upsert_decision(
             f"  confidence: {decision.confidence}, "
             f"  alternatives_considered: '{alternatives_json}', "
             f"  evidence_chunk_ids: '{evidence_json}', "
-            f"  acl_roles: '{json.dumps(acl_roles)}', "
+            f"  acl_roles: '{_escape(json.dumps(acl_roles))}', "
             f"  classification: '{classification}', "
             f"  source_document_id: '{source_document_id}' "
             f"}}) RETURN id(d)"
         )
+        await session.execute(text("SAVEPOINT decision_sp;"))
         try:
             result = await session.execute(text(_cypher(cypher)))
             row = result.fetchone()
+            await session.execute(text("RELEASE SAVEPOINT decision_sp;"))
             if not row:
                 return
             decision_node_id = str(row[0])
@@ -176,14 +181,19 @@ async def upsert_decision(
                     f"WHERE id(d) = {decision_node_id} "
                     f"MERGE (d)-[:MADE_BY]->(p)"
                 )
+                await session.execute(text("SAVEPOINT link_sp;"))
                 try:
                     await session.execute(text(_cypher(link_cypher)))
+                    await session.execute(text("RELEASE SAVEPOINT link_sp;"))
                 except Exception:
-                    pass
+                    await session.execute(text("ROLLBACK TO SAVEPOINT link_sp;"))
 
             await session.commit()
         except Exception as exc:
+            await session.execute(text("ROLLBACK TO SAVEPOINT decision_sp;"))
             log.warning(f"Failed to create decision node: {exc}")
+        # Restore normal search_path so shared sessions can continue with ORM queries.
+        await session.execute(text("SET search_path = '$user', public;"))
 
     if db:
         await _run(db)
@@ -269,5 +279,7 @@ async def query_decisions(
 
 
 def _escape(s: str) -> str:
-    """Escape single quotes for embedding in Cypher string literals."""
-    return (s or "").replace("'", "\\'").replace("\\", "\\\\")[:500]
+    """Escape single quotes for embedding in AGE Cypher string literals.
+    AGE uses $$ dollar-quoting for the outer SQL, so backslash-escaping is NOT
+    processed by Postgres. Use '' (doubled single-quote) which openCypher supports."""
+    return (s or "").replace("'", "''")[:500]

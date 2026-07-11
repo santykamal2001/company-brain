@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Union
 from uuid import UUID
 
 from sqlalchemy import select
@@ -86,7 +86,7 @@ async def post_filter_chunks(
     """
     Re-verify chunk permissions against Postgres (source of truth).
     Returns (allowed_ids, denied_ids).
-    This catches Qdrant payload staleness after ACL version bumps.
+    Falls back to Document table when no DocumentACL record exists.
     """
     if not chunk_ids:
         return [], []
@@ -98,12 +98,25 @@ async def post_filter_chunks(
     chunk_rows = rows.all()
 
     doc_ids = list({str(r.document_id) for r in chunk_rows})
+    doc_uuid_list = [UUID(d) for d in doc_ids]
+
+    # Try DocumentACL first (explicit ACL table)
     acl_rows = await db.execute(
-        select(DocumentACL).where(DocumentACL.document_id.in_([UUID(d) for d in doc_ids]))
+        select(DocumentACL).where(DocumentACL.document_id.in_(doc_uuid_list))
     )
     doc_acls: dict[str, DocumentACL] = {
         str(a.document_id): a for a in acl_rows.scalars()
     }
+
+    # Fall back to Document table for docs without a DocumentACL record
+    missing_doc_ids = [d for d in doc_ids if d not in doc_acls]
+    if missing_doc_ids:
+        from access_control.models import Document
+        doc_rows = await db.execute(
+            select(Document).where(Document.id.in_([UUID(d) for d in missing_doc_ids]))
+        )
+        for doc in doc_rows.scalars():
+            doc_acls[str(doc.id)] = _doc_as_acl(doc)
 
     allowed, denied = [], []
     max_level = _classification_level(acl.max_classification)
@@ -111,7 +124,11 @@ async def post_filter_chunks(
     for row in chunk_rows:
         doc_acl = doc_acls.get(str(row.document_id))
         if doc_acl is None:
-            denied.append(str(row.id))
+            # No ACL at all — allow admin, deny others
+            if acl.role == RoleEnum.admin:
+                allowed.append(str(row.id))
+            else:
+                denied.append(str(row.id))
             continue
 
         doc_level = _classification_level(doc_acl.classification)
@@ -119,9 +136,8 @@ async def post_filter_chunks(
             denied.append(str(row.id))
             continue
 
-        # Role check
+        # Role check: empty list = no restriction
         if doc_acl.allowed_roles and acl.role.value not in doc_acl.allowed_roles:
-            # explicit whitelist on user overrides
             if str(acl.user_id) not in (doc_acl.allowed_users or []):
                 denied.append(str(row.id))
                 continue
@@ -136,6 +152,26 @@ async def post_filter_chunks(
         allowed.append(str(row.id))
 
     return allowed, denied
+
+
+@dataclass
+class _DocAcl:
+    """Lightweight ACL view synthesized from a Document when no DocumentACL row exists."""
+    classification: ClassificationEnum
+    allowed_roles: list
+    allowed_departments: list
+    allowed_users: list
+    acl_version: int
+
+
+def _doc_as_acl(doc) -> _DocAcl:
+    return _DocAcl(
+        classification=doc.classification,
+        allowed_roles=doc.allowed_roles or [],
+        allowed_departments=doc.allowed_departments or [],
+        allowed_users=doc.allowed_users or [],
+        acl_version=doc.acl_version,
+    )
 
 
 def acl_payload_for_chunk(

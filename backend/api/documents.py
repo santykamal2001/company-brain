@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from access_control.models import ClassificationEnum, Document, RoleEnum
+from access_control.models import Chunk, ClassificationEnum, Document, RoleEnum
 from api.auth import CurrentUser
 from config import get_settings
 from database import get_db
@@ -193,7 +193,16 @@ async def delete_document(
         raise HTTPException(status_code=404, detail="Document not found")
 
     from retrieval.vector_store import delete_document_chunks
+    from sqlalchemy import update as sql_update
     await delete_document_chunks(str(document_id))
+
+    # Clear self-referential FK before deleting parent chunks (no ON DELETE SET NULL on the FK)
+    await db.execute(
+        sql_update(Chunk)
+        .where(Chunk.document_id == document_id)
+        .values(parent_chunk_id=None)
+    )
+    await db.commit()
 
     await db.delete(doc)
     await db.commit()

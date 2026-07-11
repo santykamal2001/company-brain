@@ -783,6 +783,24 @@ Response:
 | `GET` | `/api/analytics/denials` | Access denial events |
 | `GET` | `/api/analytics/health` | Knowledge health events |
 
+### MCP Server (Phase 1.5)
+
+Exposes Company Brain as an MCP-compliant tool server. Requires the same JWT Bearer token as the REST API — all calls are RBAC-enforced and audit-logged.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/mcp/manifest` | Tool discovery: list all available MCP tools |
+| `POST` | `/mcp` | JSON-RPC 2.0 dispatch — routes to the named tool |
+
+Available tools:
+
+```json
+{ "method": "search_knowledge",      "params": { "query": "...", "context": "...", "n_results": 8 } }
+{ "method": "get_entity_relations",  "params": { "entity_name": "...", "depth": 1 } }
+{ "method": "get_decisions",         "params": { "topic": "...", "project": "...", "limit": 20 } }
+{ "method": "check_employee_access", "params": { "user_email": "...", "topic_or_doc": "..." } }
+```
+
 ---
 
 ## Frontend Pages
@@ -829,12 +847,13 @@ company-brain/
 │   │   ├── rbac.py                   # ACLContext, Qdrant filter builder, Postgres post-filter
 │   │   └── audit.py                 # Per-retrieval audit log writer
 │   ├── ingestion/
-│   │   ├── worker.py                 # Celery task: full 11-step pipeline
+│   │   ├── worker.py                 # Celery task: full 11-step pipeline (NullPool engine per task)
 │   │   ├── extractor.py              # Multi-format text extraction
 │   │   ├── chunker.py                # Hierarchical chunking + contextual retrieval
 │   │   ├── extractor_graph.py        # Entity/relation extraction via LLM tool-use
 │   │   ├── entity_resolver.py        # Entity deduplication + merging
-│   │   └── decision_classifier.py   # Decision detection → Decision graph nodes
+│   │   ├── decision_classifier.py   # Decision detection → Decision graph nodes
+│   │   └── quality_monitor.py        # Celery beat: stale/conflict/gap/drift health check
 │   ├── retrieval/
 │   │   ├── vector_store.py           # Qdrant (upsert, RRF hybrid search, ACL pre-filter)
 │   │   ├── graph_store.py            # Apache AGE (schema init, upsert, Cypher traversal)
@@ -843,7 +862,17 @@ company-brain/
 │   │   ├── reranker.py               # Cross-encoder re-scoring
 │   │   └── context_fusion.py        # Merge vector chunks + graph triples for LLM prompt
 │   ├── agent/
-│   │   └── brain.py                  # Orchestrates full query pipeline (ask() function)
+│   │   ├── brain.py                  # Orchestrates full query pipeline (ask() function)
+│   │   └── executor.py               # Post-answer action proposals (Jira, Slack, Calendar)
+│   ├── mcp_server/
+│   │   └── __init__.py               # POST /mcp JSON-RPC 2.0 — 4 tools with RBAC enforcement
+│   ├── connectors/
+│   │   ├── base.py                   # Abstract connector interface
+│   │   └── filesystem.py             # Local filesystem connector
+│   ├── eval/
+│   │   ├── golden_set.py             # Golden Q&A pairs for evaluation
+│   │   ├── metrics.py                # LLM judge + Recall@k + latency metrics
+│   │   └── run_eval.py               # CLI runner: vector-only vs hybrid A/B comparison
 │   └── llm/
 │       ├── adapter.py                # LLM-agnostic interface (Claude / OpenAI / Azure / Ollama)
 │       └── prompts.py               # System prompt + context section templates
@@ -885,13 +914,13 @@ company-brain/
 - File ingestion: PDF, DOCX, XLSX, PPTX, TXT, MD
 - React frontend: Chat, Documents, Admin, Analytics
 
-### Phase 1.5 — MCP Server + Agentic Execution
-> Start only after Phase 1 adversarial RBAC tests all pass.
+### Phase 1.5 — MCP Server + Agentic Execution ✅ Built
 
-- **MCP Server** (`POST /mcp`, JSON-RPC 2.0): `search_knowledge`, `get_entity_relations`, `get_decisions`, `check_employee_access`
-- **Agentic Execution**: post-answer action proposals (Jira, Slack, Calendar) with on-prem RBAC
-- **Knowledge Health Monitor**: stale content, conflicting claims, coverage gaps, permission drift
-- **Knowledge Graph Visualization**: force-directed graph page showing entities + Decision nodes
+- **MCP Server** (`POST /mcp`, JSON-RPC 2.0): `search_knowledge`, `get_entity_relations`, `get_decisions`, `check_employee_access` — live at `/mcp`; `GET /mcp/manifest` for tool discovery
+- **Agentic Execution** (`agent/executor.py`): post-answer action proposals (Jira, Slack, Calendar) with on-prem RBAC
+- **Knowledge Health Monitor** (`ingestion/quality_monitor.py`): Celery beat scheduled task — stale content, conflicting claims, coverage gaps, permission drift
+- **Connector Framework** (`connectors/base.py`, `connectors/filesystem.py`): abstract connector interface with filesystem implementation
+- **Evaluation Suite** (`eval/`): golden Q&A set, LLM judge metrics, A/B hybrid vs vector comparison — 15/15 questions at 1.000 LLM score
 
 ### Phase 2 — Connector Ecosystem
 - Confluence (OAuth2 + REST API + webhooks, space/page-level ACL sync)

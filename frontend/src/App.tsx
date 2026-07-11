@@ -1,96 +1,238 @@
-import { useEffect, useState } from "react";
-import { BrowserRouter, NavLink, Route, Routes, Navigate } from "react-router-dom";
+import { createContext, useContext, useEffect, useState } from "react";
+import { BrowserRouter, NavLink, Navigate, Route, Routes } from "react-router-dom";
 import {
-  MessageSquare, FileText, BarChart2, Settings, Network, LogOut,
+  MessageSquare, Network, FileText, Shield, ClipboardList,
+  LogOut, Sun, Moon,
 } from "lucide-react";
 import { getMe, logout, type Me } from "./lib/api";
-import Chat from "./pages/Chat";
-import Documents from "./pages/Documents";
-import Analytics from "./pages/Analytics";
-import Admin from "./pages/Admin";
+import Landing from "./pages/Landing";
 import Login from "./pages/Login";
+import Welcome from "./pages/Welcome";
+import Chat from "./pages/Chat";
+import Graph from "./pages/Graph";
+import Documents from "./pages/Documents";
+import Governance from "./pages/Governance";
+import AuditLog from "./pages/AuditLog";
 
+// ─── Contexts ──────────────────────────────────────────────────────────────
+export const ThemeCtx = createContext<{ theme: string; toggle: () => void }>({
+  theme: "light",
+  toggle: () => {},
+});
+export const UserCtx = createContext<{
+  user: Me | null;
+  setUser: (u: Me | null) => void;
+}>({ user: null, setUser: () => {} });
+
+export function useTheme() { return useContext(ThemeCtx); }
+export function useUser()  { return useContext(UserCtx); }
+
+// ─── Protected route ────────────────────────────────────────────────────────
+function Protected({ children }: { children: React.ReactNode }) {
+  const { user } = useUser();
+  return user ? <>{children}</> : <Navigate to="/login" replace />;
+}
+
+// ─── Sidebar logo ───────────────────────────────────────────────────────────
+function MnemoLogo() {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+        <polygon
+          points="14,2 25,8 25,20 14,26 3,20 3,8"
+          fill="var(--primary)"
+          opacity="0.15"
+        />
+        <polygon
+          points="14,2 25,8 25,20 14,26 3,20 3,8"
+          stroke="var(--primary)"
+          strokeWidth="1.5"
+          fill="none"
+        />
+        <circle cx="14" cy="14" r="3.5" fill="var(--primary)" />
+        <line x1="14" y1="10.5" x2="14" y2="5"   stroke="var(--primary)" strokeWidth="1.2" opacity="0.7" />
+        <line x1="14" y1="17.5" x2="14" y2="23"  stroke="var(--primary)" strokeWidth="1.2" opacity="0.7" />
+        <line x1="10.5" y1="12" x2="5.5" y2="9"  stroke="var(--primary)" strokeWidth="1.2" opacity="0.7" />
+        <line x1="17.5" y1="16" x2="22.5" y2="19" stroke="var(--primary)" strokeWidth="1.2" opacity="0.7" />
+      </svg>
+      <span style={{ fontWeight: 600, fontSize: 15, letterSpacing: "-0.01em", color: "var(--text)" }}>
+        Mnemo
+      </span>
+    </div>
+  );
+}
+
+// ─── Sidebar ────────────────────────────────────────────────────────────────
 const NAV = [
-  { to: "/chat", label: "Chat", icon: MessageSquare },
-  { to: "/documents", label: "Documents", icon: FileText },
-  { to: "/analytics", label: "Analytics", icon: BarChart2 },
+  { to: "/app/ask",        label: "Ask",             icon: MessageSquare },
+  { to: "/app/graph",      label: "Knowledge Graph", icon: Network },
+  { to: "/app/documents",  label: "Documents",       icon: FileText },
+  { to: "/app/audit",      label: "Audit Log",       icon: ClipboardList },
 ];
 
-function Layout({ user, onLogout }: { user: Me; onLogout: () => void }) {
+const navLinkStyle = (isActive: boolean): React.CSSProperties => ({
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "7px 10px",
+  borderRadius: 8,
+  fontSize: 13,
+  fontWeight: isActive ? 500 : 400,
+  color: isActive ? "var(--primary)" : "var(--text-2)",
+  background: isActive ? "var(--primary-soft)" : "transparent",
+  transition: "background 0.15s, color 0.15s",
+  textDecoration: "none",
+  cursor: "pointer",
+});
+
+function Sidebar({ user, onLogout }: { user: Me; onLogout: () => void }) {
+  const { theme, toggle } = useTheme();
+
+  const nav = user.role === "admin"
+    ? [...NAV, { to: "/app/governance", label: "Governance", icon: Shield }]
+    : NAV;
+
   return (
-    <div className="flex h-screen bg-gray-50 font-sans">
-      {/* Sidebar */}
-      <aside className="w-56 bg-white border-r border-gray-100 flex flex-col">
-        <div className="px-4 py-5 border-b border-gray-100">
-          <div className="flex items-center gap-2">
-            <Network size={20} className="text-blue-600" />
-            <span className="font-semibold text-gray-800">Company Brain</span>
-          </div>
-        </div>
+    <aside style={{
+      width: 212,
+      background: "var(--surface)",
+      borderRight: "1px solid var(--border)",
+      display: "flex",
+      flexDirection: "column",
+      flexShrink: 0,
+    }}>
+      {/* Brand */}
+      <div style={{ padding: "16px 14px 14px", borderBottom: "1px solid var(--border)" }}>
+        <MnemoLogo />
+      </div>
 
-        <nav className="flex-1 p-2 space-y-0.5">
-          {NAV.map(({ to, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              className={({ isActive }) =>
-                `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
-                  isActive
-                    ? "bg-blue-50 text-blue-700 font-medium"
-                    : "text-gray-600 hover:bg-gray-50"
-                }`
-              }
-            >
-              <Icon size={16} />
-              {label}
-            </NavLink>
-          ))}
-          {user.role === "admin" && (
-            <NavLink
-              to="/admin"
-              className={({ isActive }) =>
-                `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
-                  isActive ? "bg-blue-50 text-blue-700 font-medium" : "text-gray-600 hover:bg-gray-50"
-                }`
-              }
-            >
-              <Settings size={16} />
-              Admin
-            </NavLink>
-          )}
-        </nav>
-
-        <div className="p-3 border-t border-gray-100">
-          <div className="px-2 py-1 mb-1">
-            <p className="text-xs font-medium text-gray-700 truncate">{user.email}</p>
-            <p className="text-xs text-gray-400">{user.role}</p>
-          </div>
-          <button
-            onClick={onLogout}
-            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-gray-500 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+      {/* Nav */}
+      <nav style={{ flex: 1, padding: "8px 6px", display: "flex", flexDirection: "column", gap: 2 }}>
+        {nav.map(({ to, label, icon: Icon }) => (
+          <NavLink
+            key={to}
+            to={to}
+            style={({ isActive }) => navLinkStyle(isActive)}
           >
-            <LogOut size={14} /> Sign out
-          </button>
-        </div>
-      </aside>
+            <Icon size={15} />
+            {label}
+          </NavLink>
+        ))}
+      </nav>
 
-      {/* Main content */}
-      <main className="flex-1 overflow-hidden flex flex-col">
+      {/* Footer */}
+      <div style={{ padding: "10px 10px 14px", borderTop: "1px solid var(--border)" }}>
+        {/* Theme toggle */}
+        <button
+          onClick={toggle}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            width: "100%",
+            padding: "6px 10px",
+            borderRadius: 8,
+            fontSize: 12,
+            color: "var(--text-3)",
+            marginBottom: 6,
+          }}
+        >
+          {theme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
+          {theme === "dark" ? "Light mode" : "Dark mode"}
+        </button>
+
+        {/* User info */}
+        <div style={{ padding: "6px 10px", marginBottom: 4 }}>
+          <p style={{ margin: 0, fontSize: 12, fontWeight: 500, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {user.username || user.email}
+          </p>
+          <p style={{ margin: "2px 0 0", fontSize: 11, color: "var(--text-3)" }}>
+            {user.role}{user.department ? ` · ${user.department}` : ""}
+          </p>
+        </div>
+
+        {/* Sign out */}
+        <button
+          onClick={onLogout}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            width: "100%",
+            padding: "6px 10px",
+            borderRadius: 8,
+            fontSize: 12,
+            color: "var(--text-3)",
+          }}
+          onMouseEnter={e => {
+            (e.currentTarget as HTMLElement).style.color = "var(--danger)";
+            (e.currentTarget as HTMLElement).style.background = "var(--danger-soft)";
+          }}
+          onMouseLeave={e => {
+            (e.currentTarget as HTMLElement).style.color = "var(--text-3)";
+            (e.currentTarget as HTMLElement).style.background = "transparent";
+          }}
+        >
+          <LogOut size={13} /> Sign out
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+// ─── App layout (sidebar + content) ─────────────────────────────────────────
+function AppLayout() {
+  const { user, setUser } = useUser();
+  if (!user) return <Navigate to="/login" replace />;
+
+  const handleLogout = async () => {
+    await logout().catch(() => {});
+    setUser(null);
+  };
+
+  return (
+    <div style={{ display: "flex", height: "100vh", overflow: "hidden" }}>
+      <Sidebar user={user} onLogout={handleLogout} />
+      <main style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
         <Routes>
-          <Route path="/chat" element={<Chat />} />
-          <Route path="/documents" element={<Documents />} />
-          <Route path="/analytics" element={<Analytics />} />
-          <Route path="/admin" element={<Admin />} />
-          <Route path="*" element={<Navigate to="/chat" replace />} />
+          <Route path="ask"        element={<Chat />} />
+          <Route path="graph"      element={<Graph />} />
+          <Route path="documents"  element={<Documents />} />
+          <Route path="governance" element={<Governance />} />
+          <Route path="audit"      element={<AuditLog />} />
+          <Route path="*"          element={<Navigate to="ask" replace />} />
         </Routes>
       </main>
     </div>
   );
 }
 
+// ─── Loading screen ──────────────────────────────────────────────────────────
+function LoadingScreen() {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", justifyContent: "center",
+      height: "100vh", background: "var(--bg)",
+    }}>
+      <svg width="32" height="32" viewBox="0 0 28 28" className="animate-spin" fill="none">
+        <polygon points="14,2 25,8 25,20 14,26 3,20 3,8" stroke="var(--primary)" strokeWidth="1.5" />
+        <circle cx="14" cy="14" r="3" fill="var(--primary)" />
+      </svg>
+    </div>
+  );
+}
+
+// ─── Root ────────────────────────────────────────────────────────────────────
 export default function App() {
+  const [theme, setTheme] = useState<string>(() => {
+    return localStorage.getItem("mnemo-theme") || "light";
+  });
   const [user, setUser] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     getMe()
@@ -99,26 +241,31 @@ export default function App() {
       .finally(() => setLoading(false));
   }, []);
 
-  const handleLogout = async () => {
-    await logout().catch(() => {});
-    setUser(null);
+  const toggle = () => {
+    const next = theme === "light" ? "dark" : "light";
+    setTheme(next);
+    localStorage.setItem("mnemo-theme", next);
   };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <Network size={32} className="text-blue-500 animate-pulse" />
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <Login onLogin={() => getMe().then(setUser)} />;
-  }
+  if (loading) return (
+    <ThemeCtx.Provider value={{ theme, toggle }}>
+      <LoadingScreen />
+    </ThemeCtx.Provider>
+  );
 
   return (
-    <BrowserRouter>
-      <Layout user={user} onLogout={handleLogout} />
-    </BrowserRouter>
+    <ThemeCtx.Provider value={{ theme, toggle }}>
+      <UserCtx.Provider value={{ user, setUser }}>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/"       element={<Landing />} />
+            <Route path="/login"  element={<Login />} />
+            <Route path="/welcome" element={<Protected><Welcome /></Protected>} />
+            <Route path="/app/*"  element={<Protected><AppLayout /></Protected>} />
+            <Route path="*"       element={<Navigate to="/" replace />} />
+          </Routes>
+        </BrowserRouter>
+      </UserCtx.Provider>
+    </ThemeCtx.Provider>
   );
 }

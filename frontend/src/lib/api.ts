@@ -144,3 +144,17 @@ export const getHealthEvents = () =>
     "GET",
     "/api/analytics/health-events",
   );
+
+// ─── Audit Log ─────────────────────────────────────────────────────────────
+export interface AuditEntry {
+  event_type: string;
+  retrieval_mode: string;
+  caller_type: string;
+  chunks_returned: number;
+  chunks_denied: number;
+  latency_ms: number;
+  timestamp: string | null;
+}
+
+export const getAuditLog = () =>
+  request<AuditEntry[]>("GET", "/api/analytics/audit-log");

@@ -114,12 +114,14 @@ from api.auth import router as auth_router
 from api.documents import router as documents_router
 from api.query import router as query_router
 from api.users import router as users_router
+from mcp_server import router as mcp_router
 
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(documents_router)
 app.include_router(query_router)
 app.include_router(analytics_router)
+app.include_router(mcp_router)
 
 
 @app.get("/health")

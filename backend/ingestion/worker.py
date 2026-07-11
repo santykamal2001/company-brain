@@ -25,6 +25,18 @@ app.conf.task_serializer = "json"
 app.conf.result_serializer = "json"
 app.conf.accept_content = ["json"]
 
+# Celery beat: daily knowledge health check at 03:00 UTC
+app.conf.beat_schedule = {
+    "daily-health-check": {
+        "task": "quality_monitor.run_health_check",
+        "schedule": 86400,  # every 24h in seconds; replace with crontab(hour=3) for exact time
+    },
+}
+app.conf.timezone = "UTC"
+
+# Ensure quality_monitor tasks are discoverable by Celery
+app.autodiscover_tasks(["ingestion"])
+
 log = logging.getLogger(__name__)
 
 
@@ -41,6 +53,22 @@ def _file_hash(path: Path) -> str:
     return h.hexdigest()
 
 
+def _make_worker_session():
+    """
+    Create a fresh NullPool async session for Celery forked workers.
+    NullPool avoids the 'Future attached to a different loop' error that occurs
+    when the module-level pooled engine from database.py is reused across asyncio.run() calls.
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+    worker_engine = create_async_engine(
+        settings.database_url,
+        echo=False,
+        poolclass=NullPool,
+    )
+    return async_sessionmaker(worker_engine, class_=AsyncSession, expire_on_commit=False)
+
+
 @app.task(bind=True, max_retries=3, default_retry_delay=30)
 def process_document(self, document_id: str, file_path: str) -> dict:
     """Full ingestion pipeline for a single document. Runs synchronously via asyncio.run."""
@@ -52,7 +80,7 @@ def process_document(self, document_id: str, file_path: str) -> dict:
 
 
 async def _process_document_async(document_id: str, file_path: str) -> dict:
-    from database import AsyncSessionLocal
+    AsyncSessionLocal = _make_worker_session()
     from access_control.models import ClassificationEnum, Document
     from access_control.rbac import acl_payload_for_chunk
     from ingestion.chunker import add_contextual_text, chunk_document
@@ -144,12 +172,14 @@ async def _process_document_async(document_id: str, file_path: str) -> dict:
             deduped_entities = deduplicate_within_batch(extraction.entities)
 
             # 9. Graph upsert (Apache AGE via Postgres)
+            # Pass db so graph_store reuses the same NullPool connection (no loop mismatch).
             entity_name_to_id = await upsert_entities_and_relations(
                 entities=deduped_entities,
                 relations=extraction.relations,
                 source_document_id=document_id,
                 acl_roles=doc.allowed_roles,
                 classification=classification.value,
+                db=db,
             )
 
             # 10. Decision Trail detection
@@ -164,6 +194,7 @@ async def _process_document_async(document_id: str, file_path: str) -> dict:
                     source_document_id=document_id,
                     acl_roles=doc.allowed_roles,
                     classification=classification.value,
+                    db=db,
                 )
 
             doc.status = "done"

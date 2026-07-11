@@ -1,18 +1,146 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+/* ── Geist font ─────────────────────────────────────────────────────────── */
+@font-face {
+  font-family: 'Geist';
+  src: url('https://cdn.jsdelivr.net/fontsource/fonts/geist-sans@latest/latin-400-normal.woff2') format('woff2');
+  font-weight: 400; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('https://cdn.jsdelivr.net/fontsource/fonts/geist-sans@latest/latin-500-normal.woff2') format('woff2');
+  font-weight: 500; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('https://cdn.jsdelivr.net/fontsource/fonts/geist-sans@latest/latin-600-normal.woff2') format('woff2');
+  font-weight: 600; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('https://cdn.jsdelivr.net/fontsource/fonts/geist-sans@latest/latin-700-normal.woff2') format('woff2');
+  font-weight: 700; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('https://cdn.jsdelivr.net/fontsource/fonts/geist-mono@latest/latin-400-normal.woff2') format('woff2');
+  font-weight: 400; font-display: swap;
+}
 
+/* ── Light theme (default) ──────────────────────────────────────────────── */
+:root {
+  --bg: #F4F2EC;
+  --surface: #FFFFFF;
+  --surface-2: #FBFAF6;
+  --surface-3: #F0EDE5;
+  --border: #E5E2D9;
+  --border-2: #D6D2C7;
+  --text: #1D1C18;
+  --text-2: #5A574F;
+  --text-3: #908D84;
+  --primary: #0E8C79;
+  --primary-strong: #0B6F61;
+  --primary-soft: #E0F0EC;
+  --on-primary: #FFFFFF;
+  --decision: #C0673E;
+  --decision-soft: #F7E7DE;
+  --ok: #2E9E6A;
+  --ok-soft: #E4F1EA;
+  --warn: #BC8A2C;
+  --warn-soft: #F6ECD7;
+  --danger: #C24B3A;
+  --danger-soft: #F7E2DD;
+  --shadow: rgba(40,38,30,0.10);
+  --neural-rgb: 14,140,121;
+}
+
+/* ── Dark theme ─────────────────────────────────────────────────────────── */
+[data-theme="dark"] {
+  --bg: #111316;
+  --surface: #191B20;
+  --surface-2: #202329;
+  --surface-3: #272A31;
+  --border: #2B2E36;
+  --border-2: #3A3E47;
+  --text: #ECEAE3;
+  --text-2: #A6A39B;
+  --text-3: #74716A;
+  --primary: #1CB7A0;
+  --primary-strong: #16A08B;
+  --primary-soft: rgba(28,183,160,0.14);
+  --on-primary: #06231F;
+  --decision: #DD8158;
+  --decision-soft: rgba(221,129,88,0.16);
+  --ok: #3DB985;
+  --ok-soft: rgba(61,185,133,0.15);
+  --warn: #D7A848;
+  --warn-soft: rgba(215,168,72,0.15);
+  --danger: #DD6552;
+  --danger-soft: rgba(221,101,82,0.15);
+  --shadow: rgba(0,0,0,0.40);
+  --neural-rgb: 28,183,160;
+}
+
+/* ── Reset ──────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
+
+html, body { height: 100%; }
 
 body {
   margin: 0;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
-  background: #f9fafb;
-  color: #111827;
+  background: var(--bg);
+  color: var(--text);
 }
 
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; cursor: pointer; border: none; background: none; }
+input, textarea, select { font-family: inherit; }
+img { max-width: 100%; }
+
+#root { height: 100%; }
+
+/* ── Animations ─────────────────────────────────────────────────────────── */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.4; } 50% { opacity: 1; }
+}
+@keyframes slide-in {
+  from { transform: translateX(-8px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+.animate-spin   { animation: spin 1s linear infinite; }
+.animate-fadein { animation: fadeIn 0.25s ease both; }
+
+/* ── Scrollbar ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-3); }
+
+/* ── Utilities ──────────────────────────────────────────────────────────── */
 .line-clamp-2 {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.mono { font-family: 'Geist Mono', 'Courier New', monospace; }
+
+/* ── Focus ring ─────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
